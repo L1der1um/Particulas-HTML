@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Partículas Coloridas Interativas</title>
+  <style>
+    * { margin:0; padding:0; }
+    html, body { width:100%; height:100%; overflow:hidden; background:#000; }
+    #canvas { display:block; background:#111; }
+    #btn {
+      width:100%; padding:15px; font-size:1.1em;
+      border:none; background:#222; color:#fff; cursor:pointer;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <button id="btn">Próxima Forma</button>
+  <script>
+    const canvas   = document.getElementById('canvas');
+    const ctx      = canvas.getContext('2d');
+    const btn      = document.getElementById('btn');
+    const N        = 100;           // número de partículas
+    let W, H;                        // dimensões do canvas
+    let shapeIndex = 0;             // 0..6
+    let targets    = [];            // posições‐alvo
+    const particles = [];           // partículas
+
+    // dados do ponteiro
+    const pointer = { x:0, y:0, active:false };
+    const P_RADIUS = 80;            // raio de influência
+    const P_K      = 8000;          // intensidade da repulsão
+
+    // redimensiona canvas e gera targets
+    function resize(){
+      W = window.innerWidth;
+      H = window.innerHeight - btn.offsetHeight;
+      canvas.width  = W;
+      canvas.height = H;
+      generateTargets();
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // classe Partícula com cor aleatória
+    class Particle {
+      constructor(){
+        this.x  = Math.random()*W;
+        this.y  = Math.random()*H;
+        this.vx = 0;
+        this.vy = 0;
+        // cor aleatória HSL para boa distribuição
+        const h = Math.floor(Math.random()*360);
+        const s = 60 + Math.random()*20; // 60% a 80%
+        const l = 50 + Math.random()*10; // 50% a 60%
+        this.color = `hsl(${h},${s}%,${l}%)`;
+      }
+      update(fx, fy){
+        this.vx = (this.vx + fx) * 0.90;
+        this.vy = (this.vy + fy) * 0.90;
+        this.x  += this.vx;
+        this.y  += this.vy;
+      }
+      draw(){
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 2.5, 0, 2*Math.PI);
+        ctx.fill();
+      }
+    }
+
+    // inicializa partículas
+    for(let i=0; i<N; i++) particles.push(new Particle());
+
+    // gera N pontos‐alvo sobre o contorno da forma atual
+    function generateTargets(){
+      const cx = W/2, cy = H/2;
+      const r  = Math.min(W,H)/3;
+      let pts = [];
+
+      if(shapeIndex === 0){
+        // círculo
+        for(let i=0; i<N; i++){
+          const a = 2*Math.PI*i/N;
+          pts.push({ x: cx+Math.cos(a)*r, y: cy+Math.sin(a)*r });
+        }
+      }
+      else if(shapeIndex === 6){
+        // coração paramétrico
+        for(let i=0; i<N; i++){
+          const t = 2*Math.PI*i/N;
+          const x = 16*Math.sin(t)**3;
+          const y = -(13*Math.cos(t)-5*Math.cos(2*t)
+                    -2*Math.cos(3*t)-Math.cos(4*t));
+          pts.push({
+            x: cx + x*(r/17),
+            y: cy + y*(r/17)
+          });
+        }
+      }
+      else {
+        // polígonos regulares ou estrela
+        let sides = shapeIndex+2;
+        if(shapeIndex===5) sides = 10; // estrela 5 pontas
+        let verts = [];
+        for(let k=0; k<sides; k++){
+          const ang = k*2*Math.PI/sides - Math.PI/2;
+          const rad = (shapeIndex===5 && k%2) ? r*0.4 : r;
+          verts.push({ x:cx+Math.cos(ang)*rad, y:cy+Math.sin(ang)*rad });
+        }
+        // calcula comprimentos de arestas
+        const lens = verts.map((v,i)=>{
+          const v2 = verts[(i+1)%sides];
+          return Math.hypot(v2.x-v.x, v2.y-v.y);
+        });
+        const perim = lens.reduce((a,b)=>a+b,0);
+        const counts = lens.map(len=>Math.round(len/perim*N));
+        let sumc = counts.reduce((a,b)=>a+b,0);
+        while(sumc<N){ counts[0]++; sumc++; }
+        while(sumc>N){ counts[0]--; sumc--; }
+        for(let i=0, idx=0; i<sides; i++){
+          const v1 = verts[i], v2 = verts[(i+1)%sides];
+          for(let j=0; j<counts[i]; j++, idx++){
+            const t = j/counts[i];
+            pts.push({
+              x: v1.x + (v2.x-v1.x)*t,
+              y: v1.y + (v2.y-v1.y)*t
+            });
+          }
+        }
+      }
+
+      // ajusta tamanho de pts
+      if(pts.length> N) pts.length = N;
+      while(pts.length< N) pts.push(pts[pts.length-1]);
+      targets = pts;
+    }
+
+    // loop de animação
+    function animate(){
+      ctx.clearRect(0,0,W,H);
+
+      // forças
+      const fx = Array(N).fill(0);
+      const fy = Array(N).fill(0);
+
+      // atração ao alvo
+      for(let i=0; i<N; i++){
+        const p = particles[i], t = targets[i];
+        fx[i] += (t.x - p.x)*0.04;
+        fy[i] += (t.y - p.y)*0.04;
+      }
+
+      // repulsão mútua
+      const Rdist = 20, R2 = Rdist*Rdist, Krep = 120;
+      for(let i=0; i<N; i++){
+        for(let j=i+1; j<N; j++){
+          const pi = particles[i], pj = particles[j];
+          const dx = pi.x-pj.x, dy = pi.y-pj.y;
+          const d2 = dx*dx+dy*dy;
+          if(d2>0 && d2<R2){
+            const d = Math.sqrt(d2);
+            const f = Krep/d2;
+            const ux = dx/d, uy = dy/d;
+            fx[i] += ux*f; fy[i] += uy*f;
+            fx[j] -= ux*f; fy[j] -= uy*f;
+          }
+        }
+      }
+
+      // repulsão do ponteiro
+      if(pointer.active){
+        for(let i=0; i<N; i++){
+          const p = particles[i];
+          const dx = p.x-pointer.x, dy = p.y-pointer.y;
+          const d2 = dx*dx+dy*dy;
+          if(d2>0 && d2<P_RADIUS*P_RADIUS){
+            const d = Math.sqrt(d2);
+            const f = P_K/d2;
+            const ux = dx/d, uy = dy/d;
+            fx[i] += ux*f;
+            fy[i] += uy*f;
+          }
+        }
+      }
+
+      // atualização e desenho
+      for(let i=0; i<N; i++){
+        particles[i].update(fx[i], fy[i]);
+        particles[i].draw();
+      }
+
+      requestAnimationFrame(animate);
+    }
+    animate();
+
+    // troca de forma
+    btn.addEventListener('click', ()=>{
+      shapeIndex = (shapeIndex+1)%7;
+      generateTargets();
+    });
+
+    // eventos de mouse
+    canvas.addEventListener('mousemove', e=>{
+      pointer.x = e.clientX;
+      pointer.y = e.clientY - btn.offsetHeight;
+      pointer.active = true;
+    });
+    canvas.addEventListener('mouseleave', ()=> pointer.active = false);
+    canvas.addEventListener('mousedown', ()=> pointer.active = true);
+    canvas.addEventListener('mouseup', ()=> pointer.active = false);
+
+    // eventos de toque (mobile)
+    canvas.addEventListener('touchstart', e=>{
+      const t = e.touches[0];
+      pointer.x = t.clientX;
+      pointer.y = t.clientY - btn.offsetHeight;
+      pointer.active = true;
+    }, {passive:false});
+    canvas.addEventListener('touchmove', e=>{
+      const t = e.touches[0];
+      pointer.x = t.clientX;
+      pointer.y = t.clientY - btn.offsetHeight;
+    }, {passive:false});
+    canvas.addEventListener('touchend', ()=> pointer.active = false);
+
+// Crie um site em um só arquivo HTML que exiba partícula em movimento na tela e conforme o usuário clica em um botão posicionado abaixo da tela estas partículas tomam outra forma, faça com que este site seja responsivo e que as partículas tomem no máximo 7 formas especificais rotativamente, assim que tiver o código feito, faça um debug e tenha certeza que funcionará de forma correta. 
+
+// Agora faça com que as partículas tenham físicas entre si. Eu mencionei que as partículas devem mudar de forma, no entanto, eu quero dizer que por exemplo todas as partículas juntas devem formar algo, como por exemplo um círculo, após clicar no botão todas as partículas devem se reposicionar para formar outra coisa como por exemplo um triângulo
+
+// Agora faça com que se o usuário passar o mouse por cima das partículas elas se retraíam  e voltem ao estado original e no caso do mobile se o usuário clicar onde estas partículas estão elas se reteriam e voltem ao estado original, da mesma forma se o usuário passar o dedo por cima das partículas devem fazer o mesmo
+
+// Agora cada partícula deve ter uma cor diferente
+
+
+  </script>
+</body>
+</html>
